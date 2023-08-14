@@ -1,0 +1,742 @@
+---
+title: "Dự đoán mức tiêu thụ nhiên liệu"
+output:
+  word_document: default
+  pdf_document:
+    latex_engine: xelatex
+  html_document: null
+---
+
+# Nhập và làm sạch dữ liệu
+
+Đầu tiên, việc cần làm là cài đặt thư viện và nhập dữ liệu.
+
+```{r}
+# Load required libraries
+library(ggplot2)
+library(gridExtra)
+library(dplyr)
+library(xtable)
+library(stringdist)
+library(caret)
+library(olsrr)
+library(relaimpo)
+library(multcomp)
+library(car)
+```
+
+```{r}
+# Function to create the histogram and density plot
+blue <- "#609CFE"
+create_histogram_density_plot <- function(data, x_var, plot_title) {
+  blue <- "#609CFE"
+  
+  # Create a ggplot object and specify the data and mapping
+  p <- ggplot(data = data, aes(x = {{ x_var }}))
+  
+  # Add a histogram layer to the ggplot object
+  p + geom_histogram(fill = blue, 
+                     col = "white", 
+                     bins = 20, 
+                     lwd = 0.5, 
+                     aes(y=after_stat(density))) +
+    geom_density(alpha = 0.3) +
+    labs(title = paste("Histogram and Density Plot for", plot_title),
+         x = plot_title,
+         y = "Frequency") + 
+    theme_minimal()
+}
+
+# Function to create the histogram and density plot for factor variable
+create_histogram_density_plot_factor <- function(data, x_var, c_factor, x_title, c_title) {
+  # Create a ggplot object and specify the data and mapping
+  p <- ggplot(data = data, aes(x = {{ x_var }}, fill = factor({{ c_factor }})))
+
+  # Add a histogram layer with density
+  p + geom_histogram(bins = 20, 
+                     color = "white", 
+                     alpha = 0.7, 
+                     aes(y = after_stat(density))) +
+    geom_density(aes(group = 1), alpha = 0.5, linewidth = 0.3) +
+    labs(title = paste("Histogram and Density Plot for", x_title, "by", c_title),
+         x = x_title,
+         y = "Density") +
+    theme_minimal() +
+    facet_grid(. ~ as.factor({{ c_factor }}))
+}
+
+
+# Function to create the bar plot with percentages on top of each bar
+create_bar_plot <- function(data, x_var, plot_title) {
+  # Create a ggplot object and specify the data and mapping
+  p <- ggplot(data = data, aes(x = as.factor({{ x_var }}), fill = as.factor({{ x_var }}))) +
+    geom_bar() +
+    labs(title = paste("Bar Plot for", plot_title),
+         x = plot_title,
+         y = "Count") +
+    theme_minimal()
+
+  # Calculate the percentages and add them as text on top of the bars
+  p + geom_text(stat='count', aes(label=scales::percent(after_stat(prop)), group=1), vjust=-0.5)
+}
+
+
+scatter_plot_mpg_continuous <- function(data, x_var) {
+  ggplot(data, aes_string(x = x_var, y = "mpg")) +
+    geom_point() +
+    labs(title = paste("Scatter Plot: mpg vs.", x_var),
+         x = x_var,
+         y = "mpg") +
+    theme_minimal()
+}
+
+line_plot_mpg_discrete <- function(data, x_var) {
+  ggplot(data, aes_string(x = x_var, y = "mpg", group = x_var)) +
+    geom_line() +
+    geom_point() +
+    labs(title = paste("Line Plot: mpg vs.", x_var),
+         x = x_var,
+         y = "mpg") +
+    theme_minimal()
+}
+
+box_plot_mpg_categorical <- function(data, x_var) {
+  ggplot(data, aes_string(x = x_var, y = "mpg", fill = x_var)) +
+    geom_boxplot() +
+    labs(title = paste("Box Plot: mpg vs.", x_var),
+         x = x_var,
+         y = "mpg") +
+    theme_minimal()
+}
+
+```
+
+
+File mô tả dữ liệu mẫu, cho biết thông tin các trường thuộc tính của dữ liệu như sau:\
+
+1.  mpg: continuous (liên tục) mức tiêu thụ nhiên liệu tính theo dặm trên galon (miles/gallon),
+
+2\. cylinders: multi-valued discrete (rời rạc đa trị) - chỉ số xi-lanh của xe
+
+3\. displacement: continuous (liên tục) (Engine displacement) kích thước động cơ
+
+4\. horsepower: continuous - công suất động cơ
+
+5\. weight: continuous - khối lượng xe
+
+6\. acceleration: continuous - gia tốc xe
+
+7\. model year: multi-valued discrete - năm sản xuất
+
+8\. origin: multi-valued discrete - nơi sản xuất: 1 - North American, 2 - Europe, 3 - Asia
+
+9\. car name: string (unique for each instance) - tên xe
+
+và cho biết tập dữ liệu có 9 thuộc tính khuyết ở trường `horsepower`.
+
+Đọc phần đầu file `auto-mpg.data`
+
+```{r}
+# Read the content of the text file
+file_content <- readLines("auto-mpg.data")
+
+# Extract the first 20 lines using the head() function
+limited_lines <- head(file_content, 20)
+
+
+
+# Open the file in read mode
+con <- file("auto-mpg.data", open = "r")
+
+# Initialize a counter for lines
+num_lines <- 0
+
+# Loop through the file to count lines
+while (length(line <- readLines(con, n = 1)) > 0) {
+  num_lines <- num_lines + 1
+}
+
+# Close the file connection
+close(con)
+# Print the first 20 lines
+cat(limited_lines, sep = "\n")
+cat("Number of lines in the file:", num_lines, "\n")
+
+```
+
+Xem xét kỹ hơn trong file dữ liệu, nhận thấy kí hiệu `?` dùng để mô tả dữ liệu khuyết.
+
+```{r}
+# Replace 'path/to/your/data/file.txt' with the actual path to your data file
+data <- read.table("auto-mpg.data", sep = "", header = FALSE, na.strings = "?", quote = "\"")
+
+# Specify the column names
+col_names <- c("mpg", "cylinders", "displacement", "horsepower", "weight", "acceleration", "model_year", "origin", "car_name")
+
+# Check the number of columns in the data and the number of elements in col_names
+if (length(col_names) == ncol(data)) {
+  colnames(data) <- col_names
+} else {
+  stop("Number of column names does not match the number of columns in the data.")
+}
+
+# Check the first few rows of the imported data
+head(data)
+```
+
+Kiểm tra các dữ liệu khuyết
+
+```{r}
+# Count the number of missing values in each column
+num_missing_values <- colSums(is.na(data))
+
+# Print the number of missing values for each column
+print(num_missing_values)
+
+# Total number of cells in the data frame
+total_cells <- prod(dim(data))
+
+# Total number of missing values
+total_missing <- sum(is.na(data))
+
+# Percent of data that is missing
+percent_missing <- (total_missing / total_cells) * 100
+
+# Print the result
+cat("\n")
+cat("The percentage of missing data: ", percent_missing, "%", "\n")
+
+```
+
+Theo trực giác nhận thấy rằng, các dữ liệu về `horsepower` (mã lực) này khuyết là vì không được ghi nhận, không phải là không tồn tại. Vì thế, giữ các giá trị này là `NA` thay vì đoán các dữ liệu này. Và chỉ có khoảng `0.1675%` dữ liệu bị khuyết, do đó việc loại bỏ các dữ liệu khuyết này không ảnh hưởng đến kết quả thống kê. Dữ liệu sau khi loại bỏ các giá trị `NA`.
+
+```{r}
+# Drop rows with NA
+data <- na.omit(data)
+# Count the number of missing values in each column
+num_missing_values <- colSums(is.na(data))
+
+# Print the number of missing values for each column
+print(num_missing_values)
+
+# Assuming you have the 'data' data frame
+num_rows <- nrow(data)
+
+# Print the result
+cat("\n")
+cat("The number of instance in data: ", num_rows, "\n")
+```
+
+Nhận thấy trong dữ liệu, ở biến car_name, chữ đầu tiên có khả năng cao là hãng xe. Tách các chữ đầu tiên ở biến car_name để xem xét.
+
+```{r}
+library(dplyr)
+library(stringr)
+
+# Assuming your data variable is named "data"
+data <- data %>%
+  mutate(brand = word(car_name, 1, sep = " "))
+
+# Get unique brands using distinct() and then sort them
+brands <- data %>% 
+  distinct(brand) %>% 
+  arrange(brand)
+
+head(brands, 10)
+```
+
+Dựa theo kết quả này, có thể thấy một số vấn đề do nhập dữ liệu không nhất quán: 'maxda' cho 'mazda', hay 'chevroelt' và 'chevrolet'. Sử dụng phương pháp 'fuzzy matching' để chuyển các dữ liệu text về đúng dạng, với danh sách tên hãng xe đúng, và độ tương đồng được đặt là 90%, nếu dưới mức đó tên hãng sẽ được đặt là 'other'. Sau đó, tạo một biến mới là brand để giữ các giá trị về hãng xe.
+
+```{r}
+# Step 2: Create a reference list of valid car brand names
+reference_brands <- c("chevrolet", "buick", "plymouth", "amc", "ford", "pontiac", "dodge", "toyota", "volkswagen", "datsun", 
+                      "mazda", "oldsmobile", "renault", "mercury", "cadillac", "mercedes", "triumph", "honda", "nissan", 
+                      "subaru", "bmw", "audi", "volvo", "chrysler", "jaguar", "fiat", "mitsubishi", "saab", "peugeot", 
+                      "opel", "alfa romeo", "lotus", "isuzu", "lexus", "acura", "hyundai", "kia", "mini", "land rover", 
+                      "jaguar", "lincoln", "subaru", "fiat", "smart", "suzuki", "jeep", "maserati", "bentley", "lamborghini")
+
+
+# Step 3: Use fuzzy matching to find the closest matches for each extracted brand name
+find_closest_match <- function(x, reference_list, min_ratio = 90) {
+  distances <- stringdist::stringdistmatrix(x, reference_list)
+  closest_index <- apply(distances, 1, function(row) {
+    closest_index <- which.min(row)
+    closest_ratio <- 100 - row[closest_index]
+    if (closest_ratio >= min_ratio) {
+      return(closest_index)
+    } else {
+      return(length(reference_list) + 1)  # Return the index of "other" brand (not in the reference_list)
+    }
+  })
+  return(c(reference_list, "other")[closest_index])  # Include "other" brand in the return
+}
+
+data$brand <- find_closest_match(data$brand, reference_brands)
+
+# Step 4: Group the data by the brand attribute
+grouped_data <- data %>%
+  group_by(brand)
+
+# Step 5: You can now perform further analysis or visualization on the grouped_data.
+# For example, let's print the first few rows of each group.
+print(head(grouped_data, n = 5))
+
+# Filter rows with "other" brand
+#other_brand_data <- grouped_data %>%
+#  filter(brand == "other")
+
+# Print the rows with "other" brand
+#print(other_brand_data)
+
+```
+
+```{r}
+data$cylinders = as.factor(data$cylinders)
+data$model_year = as.factor(data$model_year)
+data$origin = as.factor(data$origin)
+data$brand = as.factor(data$brand)
+```
+
+# Phân tích dữ liệu tổng quan
+
+```{r general}
+
+
+library(dplyr)
+library(gridExtra)
+library(grid)
+library(xtable)
+
+# Assuming 'data' is the name of your data frame
+
+# Summarize the continuous variables
+library(psych)
+continuous_describe <- describe(data[, c("mpg", "displacement", "horsepower", "weight", "acceleration")])
+
+# Categorical variable summary
+category_describe <- lapply(data[, c("cylinders", "model_year", "origin", "brand")], function(x) {
+    unique <- ifelse(length(unique(x)) == 0, 0, length(unique(x)))
+    freq <- table(x)
+    most_freq <- names(freq)[which.max(freq)]
+    most_freq_count <- max(freq)
+    return(data.frame(unique, most_freq, most_freq_count))
+  })
+
+
+
+
+print(continuous_describe)
+
+# Print the summaries in a more beautiful way
+for (i in 1:length(category_describe)) {
+    cat("Variable:", names(category_describe)[i], "\n")
+    cat("Unique:", category_describe[[i]]$unique, "\n")
+    cat("Most frequent:", category_describe[[i]]$most_freq, "\n")
+    cat("Most frequent count:", category_describe[[i]]$most_freq_count, "\n\n")
+}
+```
+
+Phương pháp Phạm vi Tứ phân (Interquartile Range - IQR) (Phương pháp của Tukey) và Biểu đồ Hộp (Boxplots) là những kỹ thuật thường được sử dụng trong phân tích dữ liệu và trực quan hóa để xác định và hiểu sự tồn tại của các giá trị ngoại lai trong tập dữ liệu.
+
+Các phương pháp boxplot và Phạm vi tứ phân của có thể được sử dụng cho cả dữ liệu liên tục. Và phù hợp với nhóm dữ liệu nhỏ. Do đó, sẽ dùng 2 phương pháp này để xác định các
+
+Phương pháp Phạm vi Tứ phân (IQR) (Phương pháp của Tukey): Phương pháp IQR xác định phạm vi tứ phân là sự khác biệt giữa tứ phân thứ nhất (Q1) và tứ phân thứ ba (Q3). Các điểm dữ liệu nằm ngoài phạm vi từ Q1 - 1.5 \* IQR đến Q3 + 1.5 \* IQR được xem là các giá trị ngoại lai.
+
+Biểu đồ Hộp (Boxplots): Biểu đồ Hộp trực quan hóa phân phối dữ liệu và làm nổi bật các giá trị ngoại lai tiềm năng dưới dạng các điểm riêng lẻ nằm ngoài "whiskers" (viền) của hộp đồ thị.
+
+Xem xét dữ liệu ngoại lai
+
+```{r}
+
+# Function to detect outliers using Tukey's method
+detect_outliers <- function(column) {
+  Q1 <- quantile(column, 0.25, na.rm = TRUE)
+  Q3 <- quantile(column, 0.75, na.rm = TRUE)
+  IQR <- Q3 - Q1
+  outlier_threshold <- 1.5 * IQR
+  return(column[column < (Q1 - outlier_threshold) | column > (Q3 + outlier_threshold)])
+}
+
+# Detect outliers in all numerical attributes
+outliers <- lapply(data, function(col) {
+  if (is.numeric(col)) {
+    detect_outliers(col)
+  } else {
+    NULL
+  }
+})
+
+# Print the outliers for each numerical attribute
+for (i in seq_along(outliers)) {
+  if (!is.null(outliers[[i]])) {
+    cat("Outliers in column:", colnames(data)[i], "\n")
+    print(outliers[[i]])
+    cat("\n")
+  }
+}
+
+
+```
+
+Nhận thấy, có 2 biến có giá trị ngoại lai là \`horsepower\` và \`acceleration\`. Biểu đồ hộp của các giá trị của 2 cột này này.
+
+```{r boxplot for acceleration and horsepower}
+# Create box plot for "acceleration"
+plot_acceleration <- ggplot(data, aes(x = "", y = acceleration)) +
+  geom_boxplot() +
+  labs(title = "Box Plot - Acceleration", y = "Acceleration") +
+  theme_minimal()
+
+# Create box plot for "horsepower"
+plot_horsepower <- ggplot(data, aes(x = "", y = horsepower)) +
+  geom_boxplot() +
+  labs(title = "Box Plot - Horsepower", y = "Horsepower") +
+  theme_minimal()
+
+# Combine the plots in one picture
+grid.arrange(plot_acceleration, plot_horsepower, ncol = 2)
+
+```
+
+Dựa vào kết quả về các giá trị ngoại lai và tóm tắt các thống kê, có thể thấy
+
+1.  Cột "horsepower": Có tổng cộng 10 giá trị ngoại lai, chủ yếu nằm trong khoảng từ 208 đến 230. Giá trị trung vị (93.5) thấp hơn giá trị trung bình (104.5), cho thấy sự chênh lệch đáng kể giữa các giá trị. Sự phân tán rộng trong dữ liệu có thể được tạo ra bởi các giá trị ngoại lai này.
+
+2.  Cột "acceleration": Có tổng cộng 11 giá trị ngoại lai, trong đó có một giá trị cực lớn là 24.8. Giá trị trung vị (15.50) và giá trị trung bình (15.54) gần như bằng nhau, cho thấy sự phân phối đối xứng hơn. Tuy nhiên, các giá trị ngoại lai này có thể ảnh hưởng đáng kể đến tính đặc biệt của dữ liệu.
+
+Biểu đồ phân bố của biến mpg
+
+```{r}
+# Example usage of the function with your data (replace 'data' and 'mpg' with your actual data and column name)
+create_histogram_density_plot(data = data, x_var = data$mpg, "MPG")
+```
+
+```{r}
+# Example usage of the function with your data (replace 'data' and 'mpg' with your actual data and column name)
+create_histogram_density_plot(data = data, x_var = data$displacement, "Displacement")
+```
+
+```{r}
+# Example usage of the function with your data (replace 'data' and 'mpg' with your actual data and column name)
+create_histogram_density_plot(data = data, x_var = data$weight, "Weight")
+```
+
+```{r}
+# Example usage of the function with your data (replace 'data' and 'mpg' with your actual data and column name)
+create_histogram_density_plot(data = data, x_var = data$acceleration, "Acceleration")
+```
+```{r By brand}
+
+# Calculate the median mpg for each brand
+median_mpg_by_brand <- aggregate(mpg ~ brand, data = data, FUN = median)
+
+# Create the bar chart with x as mpg and y as brand, ordered by median mpg
+ggplot(data = median_mpg_by_brand, aes(x = mpg, y = reorder(brand, mpg))) +
+  geom_bar(stat = "identity", fill = blue, col = "white") +
+  labs(title = "MPG median by brand name", x = "MPG", y = "Brand") +
+  theme(axis.text.y = element_text(angle = 0, hjust = 1)) +
+  theme_minimal()
+```
+Từ biểu đồ nhận thấy rằng, hãng BMW sản xuất ra những xe có MPG lớn nhất, trung vị vào khoảng hơn 35 mile per.
+```{r cylinders bar plot}
+create_bar_plot(data = data, x_var = data$cylinders, "Cylinders")
+```
+
+```{r Create a bar plot for the model_year}
+create_bar_plot(data = data, x_var = data$model_year, "Model year")
+```
+
+```{r Create a bar plot for origin}
+p <- create_bar_plot(data = data, x_var = data$origin, "Origin")
+# Add x-axis labels
+p <- p + scale_x_discrete(labels = 
+                            purrr::map_chr(c("North America" = 1, "Europe" = 2, "Asia" = 3), as.character))
+
+print(p)
+```
+
+## Phân tích song biến.
+```{r}
+# Scatter plot for "mpg" vs. "displacement"
+scatter_plot_mpg_continuous(data, "displacement")
+scatter_plot_mpg_continuous(data, "horsepower")
+scatter_plot_mpg_continuous(data, "weight")
+scatter_plot_mpg_continuous(data, "acceleration")
+```
+Có dấu hiệu cho thấy rằng mpg tương quan nghịch với weight, horsepower, displacement.
+
+```{r}
+# Line plot for "mpg" vs. "cylinders"
+line_plot_mpg_discrete(data, "cylinders")
+line_plot_mpg_discrete(data, "model_year")
+line_plot_mpg_discrete(data, "origin")
+box_plot_mpg_categorical(data, "origin")
+```
+Tiến hành vẽ biểu đồ cột cho trung vị mpg theo biến hãng xe.
+
+
+
+## Phân tích song biến
+```{r}
+
+selected_variables <- c('displacement', 'horsepower', 'weight', 'acceleration')
+conditions <- c('cylinders', 'model_year', 'origin')
+
+# Loop over each selected variable
+for (var in selected_variables) {
+  for (cond in conditions) {
+    # Create a scatterplot for the current combination
+    plot_data <- data[, c(var, cond)]
+    plot_title <- paste("Scatterplot of", var, "vs", cond)
+    p <- ggplot(plot_data, aes_string(x = cond, y = var)) +
+      geom_point() +
+      labs(title = plot_title, x = cond, y = var)+
+      theme_minimal()+
+      scale_fill_discrete(name = conditions)
+    
+    # Print the plot
+    print(p)
+  }
+}
+```
+
+```{r}
+# Create a subset of the data with only numeric variables
+numeric_data <- data[, c("mpg", "displacement", "horsepower", "weight", "acceleration")]
+
+# Use the pairs() function on the numeric subset
+pairs(numeric_data)
+```
+```{r}
+#library(corrplot)
+#corrplot(cor(numeric_data, use = "pairwise.complete.obs"), method = "color")
+```
+Từ các biểu đồ cho thấy có khả năng cao 2 cặp displacement - cylinders, và horsepower - cylinders có mối tương quan với nhau.
+
+```{r}
+#with(mpg, cor(data$displacement, data$cylinders))
+```
+```{r}
+#with(mpg, cor(data$weight, data$cylinders))
+```
+ Với hệ số tương quan tương ứng là 0.95 displacement - cylinders, và 0.90 với horsepower - cylinders.
+ 
+# Phân tích hồi quy
+
+Chia bộ dữ liệu làm 2 phần, biến car_name đã được xử lý để phân tích theo brand.
+
+```{r}
+data <- subset(data, select = -car_name)
+# Define the size of the training dataset and validation dataset
+size_training <- 200
+size_validation <- nrow(data) - size_training
+
+# Create the training dataset
+set.seed(42)  # For reproducibility, you can change the number 42 to any other value
+index_training <- sample(1:nrow(data), size_training)
+auto_mpg1 <- data[index_training, ]
+
+# Create the validation dataset
+index_validation <- setdiff(1:nrow(data), index_training)
+auto_mpg2 <- data[index_validation, ]
+```
+
+## Tìm mô hình phù hợp
+Nhắc lại, nhóm phương pháp stepwise regression dựa vào trị số \(P\) có lẽ là phương pháp phổ biến nhất trong việc tìm mô hình tối ưu. Dù rất phổ biến trong thực tế, phương pháp \textit{stepwise} đã được chứng minh là thường cho ra những kết quả 'dương tính giả', tức nhận ra những biến có ý nghĩa thống kê nhưng thực tế thì không có ý nghĩa thống kê. Thay vì dựa vào trị số \(P\), phương pháp stepwise dựa vào AIC để nhận ra các 'biến tích cực' và cho ra một mô hình tối ưu.
+Nhắc lại AIC là chỉ số đo lường mức độ quân bình giữa độ phức tạp và khả năng tiên lượng của mô hình:
+\[
+  AIC = -2 \log(L) + 2p
+\]
+\[
+  L = \frac{n}{2}\,(1+\log(2\pi)) - \frac{n}{2}\log(MSE)
+\]
+Do đó, sử dụng phương pháp stepwise forward dựa vào AIC để tìm mô hình 'tối ưu'.
+Bắt đầu với mô hình chỉ có biến phụ thuộc mpg, mỗi bước, thêm vào một biến độc lập và tính AIC, chọn mô hình có AIC thấp nhất.
+
+```{r}
+# Assuming auto_mpg1 is the name of your data frame
+#auto_mpg1 <- subset(auto_mpg1, select = -car_name)
+#library(MASS)
+model.full <- lm(mpg ~ ., data = auto_mpg1)
+model.null <- lm(mpg ~ 1, data = auto_mpg1)
+MASS::stepAIC(model.null, direction = "forward", scope = list(lower = model.null,
+                                                              upper = model.full))
+```
+
+Kết quả cho thấy phương pháp forward và stepwise chọn weight, model_year, cylinders, origin, horsepower vì mô hình này có AIC thấp nhất. 
+Phương pháp "lmg" là một cách trung bình hoá các hệ số \(R^2\) cho tất cả các mô hình khả dĩ, để xem xét tỉ lệ của phương sai của từng biến độc lập.
+```{r}
+# Convert "model_year" to a factor variable
+#auto_mpg1$model_year <- factor(auto_mpg1$model_year)
+m1 = lm(mpg ~ weight + model_year + cylinders + origin + 
+    horsepower, data = auto_mpg1)
+
+summary(m1)
+calc.relimp(m1, type="lmg")
+```
+Từ kết quả thấy rằng, mô hình có hệ số \(R^2\) = 87.02%. Với \(R^2\) cho từng biến số: 
+model_year 0.22355074
+cylinders  0.18312005
+origin     0.08975833
+weight     0.20099923
+horsepower 0.17274284
+
+## Kiểm định giả thuyết
+Kiểm định giả thuyết về Origin
+```{r}
+#m.origin = lm(mpg ~ origin, data = auto_mpg1)
+comp = glht(m1, mcp(origin="Tukey"))
+summary(comp)
+plot(comp)
+```
+Từ biểu đồ trên, nhận thấy chỉ có sự khác biệt mpg trong 2 nhóm origin 1 (North America) và 3 (Asian) là có ý nghĩa thống kê.
+
+
+Sử dụng kiểm định \(P\) để kiểm định giả thuyết của các \beta_i.
+Xét bài toán kiểm định trung bình tổng thể trong trường hợp mẫu lớn \((n \geq 30)\) và chưa biết phương sai tổng thể. Tiêu chuẩn kiểm định là thống kê \(Z = \frac{\bar{X} - a_0}{s}\sqrt{n}\) ~ \(N(0, 1)\).
+\(P-value = 2\, \times P(Z > |Z_{qs}|)\)
+Với từng \(\beta_i\), phát biểu giả thuyết kiểm định:
+\(H_0: \beta_i = 0\)
+\(H_1: \beta_i \neq 0\)
+\(P-value\) được R tính cho các biến:
+Với một số \(P-value\) model_year từ năm 71 - 78, và origin2 là không có ý nghĩa thống kê ( > 0.1)
+
+Kiểm tra vấn đề cộng đa tuyến
+```{r}
+vif(m1)
+```
+Mọi giá trị VIF đều nhỏ hơn 5, do đó không có dấu hiệu đa cộng tuyến.
+
+## Kiểm tra giả định
+Mô hình hồi quy tuyến tính, dựa vào 4 giả định sau:
+1. Mối liên quan giữa \(x\) và \(y\) phải là mối liên quan tuyến tính.
+2. Phân bố phần dư \(e_i\) phải tuân theo (hay xấp xỉ) luật phân bố Chuẩn với trung bình 0 và phương sai \(s^2\).
+3. Phương sai của y không thay đổi theo giá trị của x.
+4. Các giá trị của \(y_i\) và \(y_{i-1}\) độc lập với nhau.
+
+```{r}
+library(ggfortify)
+autoplot(m1)
+```
+Biểu đồ phần trên và bên trái trình bày mối liên quan giữa giá trị tiên lượng \((\hat{y_i})\) và phần dư \(e_i\), cho thấy các giá trị phần dư xung quanh giá trị 0, tức đúng với giả định rằng giá trị trung bình của phần dư phải là 0.
+
+Biểu đồ phần trên và bên phải trình bày mối tương quan giữa giá trị lý thuyết và thực tế của phần dư. Nếu phân bố của phần dư tuân theo phân phối chuẩn thì các giá trị nằm trên đường lý thuyết, ở đây phần lớn các giá trị nằm trên đường đó. Có nghĩa giả định về phân bố chuẩn của mô hình là có thể chấp nhận được.
+
+Biểu đồ dưới bên trái trình bày mối tương quan giữa giá trị tiên lượng và căn số bậc hai của phần dư. Cho biết phương sai phần dư có hay không liên quan với giá trị của biến \(x\), biểu đồ cho thấy không có liên quan, do đó cho biết rằng giả định về đồng dạng phương sai (homogeneity) có thể chấp nhận được.
+
+Biểu đồ phần dưới bên phải trình bày giá trị "leverage" và phần dư chuẩn hoá. Biểu đồ này cho biết có những giá trị có ảnh hưởng cao (influential observation) hay không. Ngoài trừ một số giá trị, phần còn lại đều có giá trị phần dư chuẩn hoá nằm trong khoảng -2 đến +2; có thể chấp nhận rằng không có những giá trị ngoại vi có ảnh hưởng đến mô hình.
+
+```{r}
+summary(m1)
+```
+Mô hình hồi quy tuyến tính:
+\(
+\widehat{mpg} = 31.5613036 - 0.0045298 \times \text{weight} + 0.8662449 \times \text{model\_year71} - 0.9772241 \times \text{model\_year72} - 0.9745536 \times \text{model\_year73} + 0.6589873 \times \text{model\_year74} + 0.9366453 \times \text{model\_year75} + 0.6410903 \times \text{model\_year76} + 2.6482086 \times \text{model\_year77} + 2.7016085 \times \text{model\_year78} + 4.5895661 \times \text{model\_year79} + 9.2372439 \times \text{model\_year80} + 7.2525637 \times \text{model\_year81} + 7.4686626 \times \text{model\_year82} + 6.4920778 \times \text{cylinders4} + 8.6962768 \times \text{cylinders5} + 4.6426063 \times \text{cylinders6} + 7.2749683 \times \text{cylinders8} + 1.3142149 \times \text{origin2} + 2.3628473 \times \text{origin3} - 0.0403982 \times \text{horsepower}
+
+\)
+Intercept (Hệ số hằng số - (Intercept)): Là giá trị dự đoán của biến phụ thuộc (mpg) khi tất cả các biến độc lập (weight, model_year, cylinders, origin, horsepower) đều bằng 0. Trong trường hợp này, nó là 31.5613036.
+
+Weight (Trọng lượng): Đại diện cho mối quan hệ tuyến tính giữa trọng lượng (weight) của xe và mpg. Hệ số là -0.0045298, vậy mỗi đơn vị tăng trong weight sẽ dẫn đến giảm 0.0045298 đơn vị trong mpg (điều này có thể ám chỉ rằng xe nặng hơn có xu hướng tiêu thụ nhiên liệu nhiều hơn).
+
+Model_year (Năm sản xuất): Đây là các biến nhị phân (dummies) cho từng năm sản xuất. Giá trị hệ số cho từng năm thể hiện mức độ tác động của từng năm sản xuất lên giá trị của mpg so với năm tham chiếu (năm 70). Ví dụ: model_year80 có hệ số 9.2372439, vậy so với năm tham chiếu, mpg trong năm 1980 sẽ cao hơn 9.2372439 đơn vị.
+
+Cylinders (Số xi-lanh): Đây cũng là các biến nhị phân (dummies) cho số lượng xi-lanh của xe. Các hệ số cho từng số xi-lanh (4, 5, 6, 8) cho biết mức độ tác động của số xi-lanh lên mpg so với số xi-lanh tham chiếu (4). Ví dụ: cylinders5 có hệ số 8.6962768, vậy so với số xi-lanh tham chiếu, xe có 5 xi-lanh sẽ có mpg cao hơn 8.6962768 đơn vị.
+
+Origin (Xuất xứ): Cũng là biến nhị phân (dummies) cho từng nơi sản xuất xe. Hệ số cho mỗi nơi sản xuất (origin2 và origin3) cho biết mức độ tác động của nơi sản xuất lên mpg so với nơi sản xuất tham chiếu (1 - North America). Ví dụ: origin3 có hệ số 2.3628473, vậy so với nơi sản xuất tham chiếu (Bắc Mĩ), xe từ nơi sản xuất Châu á sẽ có mpg cao hơn 2.3628473 đơn vị.
+
+Horsepower (Công suất động cơ): Đại diện cho mối quan hệ tuyến tính giữa công suất động cơ (horsepower) và mpg. Hệ số là -0.0403982, vậy mỗi đơn vị tăng trong công suất động cơ sẽ dẫn đến giảm 0.0403982 đơn vị trong mpg (có thể ngụ ý rằng xe mạnh mẽ hơn có xu hướng tiêu thụ nhiên liệu cao hơn).
+
+Tóm lại, mô hình hồi quy tuyến tính này giúp dự đoán giá trị trung bình của biến phụ thuộc (mpg) dựa trên các biến độc lập (weight, model_year, cylinders, origin, horsepower), từ đó cung cấp thông tin về mức độ ảnh hưởng của mỗi biến độc lập lên mpg của xe.
+
+
+# Dự đoán
+
+```{r}
+predict_data = auto_mpg2[ ,c("model_year", "origin", "weight", "cylinders", "horsepower")]
+#predict_data$model_year <- factor(predict_data$model_year)
+#predict_data$cylinders <- factor(predict_data$cylinders)
+predict_data$origin <- factor(predict_data$origin)
+auto_mpg2$predict_mpg<-predict(m1, predict_data)
+```
+
+```{r}
+model.values1 <- data.frame(obs=auto_mpg2$mpg, pred = auto_mpg2$predict_mpg)
+defaultSummary(model.values1)
+```
+RMSE (Root Mean Squared Error): Độ đo sai số trung bình giữa giá trị dự báo và giá trị thực tế của biến phụ thuộc. Giá trị RMSE là 2.7806569, nghĩa là sai số trung bình khoảng 2.78 mpg.
+
+R-squared (Rsquared): Độ đo biểu thị tổng quan về hiệu quả của mô hình. Giá trị R-squared là 0.8715573, tức là khoảng 87.16% sự biến thiên của biến phụ thuộc có thể được giải thích bởi các biến độc lập trong mô hình.
+
+MAE (Mean Absolute Error): Độ đo sai số trung bình tuyệt đối giữa giá trị dự báo và giá trị thực tế của biến phụ thuộc. Giá trị MAE là 2.1124597, tức là sai số trung bình tuyệt đối khoảng 2.11 mpg.
+
+Cuối cùng, chúng ta sử dụng ggplot để vẽ biểu đồ scatter plot so sánh giá trị dự báo và giá trị thực tế của "mpg". Đường đỏ biểu thị đường y = x, tức là đường mà giá trị dự báo hoàn toàn trùng khớp với giá trị thực tế. Nếu các điểm dữ liệu nằm sát đường này thì mô hình dự báo có độ chính xác cao.
+```{r}
+ggplot(auto_mpg2, aes(x = mpg, y = predict_mpg)) +
+  geom_point() +
+  geom_abline(intercept = 0, slope = 1, color = "red") +
+  labs(x = "Observed mpg", y = "Predicted mpg") +
+  theme_minimal()+
+  ggtitle("Observed vs. Predicted mpg")
+```
+Dựa vào các chỉ số đánh giá mô hình, RMSE và MAE có giá trị khá thấp, điều này cho thấy mô hình dự báo khá chính xác.
+R-squared có giá trị cao (gần 1), đồng nghĩa với việc mô hình giải thích được một phần lớn sự biến thiên của biến phụ thuộc "mpg".
+Biểu đồ scatter plot cũng cho thấy các điểm dữ liệu phân bố gần đường y = x, cho thấy mô hình có sự chính xác khá tốt trong việc dự báo "mpg".
+Tóm lại, mô hình hồi quy tuyến tính đã cho kết quả dự báo tốt trên mẫu kiểm tra và có khả năng giải thích tốt biến thiên của biến phụ thuộc "mpg".
+
+# Mở rộng
+
+Xem xét biểu đồ tương quan giữa mpg và Horsepower, sự tương quan không là tuyến tính, dữ liệu gợi ý mối quan hệ đường cong. Một cách tiếp cận đơn giản để kết hợp các liên kết phi tuyến tính trong một mô hình tuyến tính là bao gồm các phiên bản đã biến đổi của các yếu tố dự báo. Ví dụ, các điểm trong Hình dường như có dạng bậc hai, gợi ý rằng một mô hình có dạng bậc hai:
+\[
+  mpg = \beta_0+\beta_1\times horsepower + \beta_2 \times {horsepower}^2 + \epsilon
+\]
+có thể cung cấp một sự phù hợp tốt hơn.
+```{r}
+ggplot(data, aes(x = horsepower, y = mpg)) +
+  geom_point() +  # Add scatter plot points
+  geom_smooth(method = "lm", formula = y ~ x, color = "orange") +  # Linear regression fit (orange)
+  geom_smooth(method = "lm", formula = y ~ poly(x, 2), color = blue) +  # Quadratic fit (blue)
+  geom_smooth(method = "lm", formula = y ~ poly(x, 1:5), color = "green") +  # Polynomial fit up to fifth-degree (green)
+  labs(x = "Horsepower", y = "MPG", title = "Auto Data Set with Regression Curves") + theme_minimal()
+```
+
+Phần dư thể hiện hình chữ U rõ ràng, cung cấp một dấu hiệu rõ ràng về tính phi tuyến tính trong dữ liệu.
+Ngược lại, bảng bên phải của Hình  hiển thị đồ thị phần dư là kết quả của mô hình , chứa một số hạng bậc hai. Dường như có rất ít mẫu trong phần dư, cho thấy rằng số hạng bậc hai cải thiện sự phù hợp với dữ liệu.
+
+```{r}
+# Load the required libraries
+library(ggplot2)
+library(ggfortify)
+library(patchwork)
+
+# Function to create separate residual plots for Linear and Quadratic Fit
+create_separate_residual_plots <- function(data, x_var, y_var) {
+  
+  # Linear Fit
+  linear_model <- lm(formula = paste(y_var, "~", x_var), data = data)
+  linear_residuals <- residuals(linear_model)
+  linear_res_plot <- autoplot(linear_model, which = 1) +
+    labs(title = "Residual Plot for Linear Fit") +
+    theme_minimal()
+  
+  # Quadratic Fit
+  quadratic_model <- lm(formula = paste(y_var, "~ poly(", x_var, ", 2)", sep = ""), data = data)
+  quadratic_residuals <- residuals(quadratic_model)
+  quadratic_res_plot <- autoplot(quadratic_model, which = 1) +
+    labs(title = "Residual Plot for Quadratic Fit") +
+    theme_minimal()
+  
+  # Return the ggplot objects
+  list(linear_plot = linear_res_plot, quadratic_plot = quadratic_res_plot)
+}
+plots <- create_separate_residual_plots(data, "horsepower", "mpg")
+
+# Combine plots using patchwork
+combined_plots <- plots$linear_plot + plots$quadratic_plot
+
+# Display the combined plots
+combined_plots
+
+```
+
+Các mối quan hệ phi tuyến tính hồi quy được gọi là hồi quy đa thức, vì đã bao gồm các hàm đa thức của các yếu tố dự báo trong mô hình hồi quy.
+Có thể tiếp tục khám phá phương pháp này và các phần mở rộng phi tuyến tính khác của mô hình tuyến tính.

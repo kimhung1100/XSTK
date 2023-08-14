@@ -1,0 +1,682 @@
+---
+output:
+  word_document: default
+  html_document: default
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r install package}
+#install.packages("caret")
+#install.packages("ggplot2")
+#install.packages("epiDisplay")
+
+```
+
+```{r}
+library(gridExtra)
+library(dplyr)
+library(xtable)
+library(psych)
+library(ggplot2)
+library(epiDisplay)
+```
+
+```{r boxplot function}
+boxplot <- function(data, x_var, plot_title) {
+  p <- ggplot(data, aes(x = "" , y = x_var))
+  p + geom_boxplot(fill = "#609CFE", color = "black") +
+    labs(title = paste("Box Plot for", plot_title),
+         x = NULL,
+         y = plot_title) +
+    #geom_jitter(alpha = 0.01)+
+    theme_minimal()
+}
+
+```
+
+```{r hist plot function}
+blue <- "#609CFE"
+create_histogram_density_plot <- function(data, x_var, plot_title) {
+  
+  
+  # Create a ggplot object and specify the data and mapping
+  p <- ggplot(data = data, aes(x = {{ x_var }}))
+  
+  # Add a histogram layer to the ggplot object
+  p + geom_histogram(fill = blue, 
+                     col = "white", 
+                     bins = 30, 
+                     lwd = 0.5, 
+                     aes(y=after_stat(density))) +
+    # geom_density(alpha = 0.3) +
+    labs(title = paste("Histogram Plot for", plot_title),
+         x = plot_title,
+         y = "Frequency") + 
+    theme_minimal()
+}
+
+```
+
+```{r barplot function}
+# Function to create the bar plot with percentages on top of each bar
+create_barplot <- function(data, x_var, plot_title) {
+  # Create a ggplot object and specify the data and mapping
+  p <- ggplot(data, aes(x = as.factor({{ x_var }}), fill = as.factor({{ x_var }}))) +
+    geom_bar() +
+    labs(title = paste("Bar Plot for", plot_title),
+         x = plot_title,
+         y = "Count") +
+    theme_minimal()
+
+  # Calculate the percentages and add them as text on top of the bars
+  p + geom_text(stat='count', aes(label=scales::percent(after_stat(prop)), group=1), vjust=-0.5)
+}
+
+# Call the function to create the bar plot
+#bar_plot <- create_barplot(df, df$General_Health,"General health")
+
+# Display the plot
+#print(bar_plot)
+
+```
+
+```{r}
+scatter_plot_continuous <- function(data, y_var, x_var) {
+  ggplot(data, aes_string(x = x_var, y = y_var)) +
+    geom_point() +
+    labs(title = paste("Scatter Plot: ",y_var,"vs", x_var),
+         x = x_var,
+         y = "mpg") +
+    theme_minimal()
+}
+
+line_plot_discrete <- function(data, y_var, x_var) {
+  ggplot(data, aes_string(x = x_var, y = y_var, group = x_var)) +
+    geom_line() +
+    geom_point() +
+    labs(title = paste("Line Plot: ",y_var,"vs", x_var),
+         x = x_var,
+         y = "mpg") +
+    theme_minimal()
+}
+
+box_plot_categorical <- function(data, y_var, x_var) {
+  ggplot(data, aes_string(x = x_var, y = y_var, fill = x_var)) +
+    geom_boxplot() +
+    labs(title = paste("Box Plot: ",y_var,"vs", x_var),
+         x = x_var,
+         y = "mpg") +
+    theme_minimal()
+}
+```
+
+# Nhập và làm sạch dữ liệu
+
+Tiến hành nhập và kiểm tra dữ liệu khuyết
+
+```{r input data}
+df <- read.csv("CVD_cleaned.csv")
+# Check for missing values in the entire dataframe
+missing_data <- is.na(df)
+
+# Check for missing values in each column
+missing_in_columns <- colSums(is.na(df))
+
+# Check for missing values in each row
+missing_in_rows <- rowSums(is.na(df))
+
+missing_in_columns
+
+```
+
+Nhận thấy rằng không có dữ liệu khuyết.
+
+Kiểm tra dataframe.
+
+```{r check dataframe structure}
+str(df)
+```
+
+Dữ liệu gồm 19 biến. Trong đó, \`Heart_Disease\` là biến phụ thuộc. Có
+các biến liên tục là 'Height\_(cm)', 'Weight\_(kg)', 'BMI',
+'Alcohol_Consumption', 'Fruit_Consumption',
+'Green_Vegetables_Consumption', 'FriedPotato_Consumption'. Các biến
+'General_Health', 'Checkup', 'Exercise', 'Heart_Disease', 'Skin_Cancer',
+'Other_Cancer', 'Depression', 'Diabetes', 'Arthritis', 'Sex',
+'Age_Category', 'Smoking_History' là biến phân loại.
+
+```{r}
+# List of continuous variables
+continuous_vars <- c('Height_.cm.', 'Weight_.kg.', 'BMI', 'Alcohol_Consumption', 'Fruit_Consumption', 'Green_Vegetables_Consumption', 'FriedPotato_Consumption')
+
+# List of categorical variables
+categorical_vars <- c('General_Health', 'Checkup', 'Exercise', 'Heart_Disease', 'Skin_Cancer', 'Other_Cancer', 'Depression', 'Diabetes', 'Arthritis', 'Sex', 'Age_Category', 'Smoking_History')
+
+# Convert the categorical variables to factors
+df[categorical_vars] <- lapply(df[categorical_vars], factor)
+
+```
+
+# Phân tích thống kê mô tả
+
+## Phân tích đơn biến
+
+### Các biến liên tục
+
+```{r}
+# Function to detect outliers using Tukey's method
+count_outliers <- function(column) {
+  Q1 <- quantile(column, 0.25, na.rm = TRUE)
+  Q3 <- quantile(column, 0.75, na.rm = TRUE)
+  IQR <- Q3 - Q1
+  outlier_threshold <- 1.5 * IQR
+  return(sum(column < (Q1 - outlier_threshold) | column > (Q3 + outlier_threshold), na.rm = TRUE))
+}
+
+# Count outliers in all numerical attributes
+outlier_counts <- lapply(df, function(col) {
+  if (is.numeric(col)) {
+    count_outliers(col)
+  } else {
+    NULL
+  }
+})
+
+# Print the outlier counts for each numerical column
+for (i in seq_along(outlier_counts)) {
+  if (!is.null(outlier_counts[[i]])) {
+    cat(names(outlier_counts)[i], ": ", outlier_counts[[i]], "\n")
+  }
+}
+```
+
+```{r Height}
+p_hist_density <- create_histogram_density_plot(df, df$Height_.cm., "Height")
+p_box <- boxplot(df, df$Height_.cm., "Height")
+  
+grid.arrange(p_hist_density, p_box, ncol = 2, widths = c(3, 1))
+describe(df$Height_.cm.)
+```
+
+Chiều cao có phân bố rất dộng, với median là 170cm, min: 91cm, max 241cm
+
+```{r Weight}
+p_hist_density <- create_histogram_density_plot(df, df$Weight_.kg., "Weight")
+p_box <- boxplot(df, df$Weight_.kg., "Weight")
+  
+grid.arrange(p_hist_density, p_box, ncol = 2, widths = c(3, 1))
+#describe(df$Weight_.cm.)
+```
+
+```{r Alcohol_Consumption}
+p_hist_density <- create_histogram_density_plot(df, df$Alcohol_Consumption, "Alcohol_Consumption")
+p_box <- boxplot(df, df$Alcohol_Consumption, "Alcohol_Consumption")
+  
+grid.arrange(p_hist_density, p_box, ncol = 2, widths = c(3, 1))
+describe(df$Alcohol_Consumption)
+```
+
+```{r Fruit_Consumption}
+p_hist_density <- create_histogram_density_plot(df, df$Fruit_Consumption, "Fruit_Consumption")
+p_box <- boxplot(df, df$Fruit_Consumption, "Fruit_Consumption")
+  
+grid.arrange(p_hist_density, p_box, ncol = 2, widths = c(3, 1))
+describe(df$Fruit_Consumption)
+```
+
+```{r Green_Vegetables_Consumption}
+p_hist_density <- create_histogram_density_plot(df, df$Green_Vegetables_Consumption, "Green_Vegetables_Consumption")
+p_box <- boxplot(df, df$Green_Vegetables_Consumption, "Green_Vegetables_Consumption")
+  
+grid.arrange(p_hist_density, p_box, ncol = 2, widths = c(3, 1))
+describe(df$Green_Vegetables_Consumption)
+```
+
+```{r FriedPotato_Consumption}
+p_hist_density <- create_histogram_density_plot(df, df$FriedPotato_Consumption, "FriedPotato_Consumption")
+p_box <- boxplot(df, df$FriedPotato_Consumption, "FriedPotato_Consumption")
+  
+grid.arrange(p_hist_density, p_box, ncol = 2, widths = c(3, 1))
+describe(df$FriedPotato_Consumption)
+```
+
+## Các biến phân loại
+
+```{r, warning = FALSE}
+print(create_barplot(df, df$Heart_Disease,"Heart disease"))
+```
+
+```{r, warning = FALSE}
+print(create_barplot(df, df$General_Health,"General health"))
+```
+
+```{r, warning = FALSE}
+print(create_barplot(df, df$Checkup,"Checkup"))
+
+```
+
+```{r, warning = FALSE}
+print(create_barplot(df, df$Exercise,"Exercise"))
+```
+
+```{r, warning = FALSE}
+print(create_barplot(df, df$Skin_Cancer,"Skin_Cancer"))
+```
+
+```{r, warning = FALSE}
+print(create_barplot(df, df$Other_Cancer,"Other Cancer"))
+```
+
+```{r, warning = FALSE}
+print(create_barplot(df, df$Depression,"Depression"))
+```
+
+```{r, warning = FALSE}
+print(create_barplot(df, df$Diabetes,"Diabetes"))
+```
+
+```{r, warning = FALSE}
+print(create_barplot(df, df$Arthritis,"Arthritis"))
+```
+
+# Bivariate Analysis
+
+```{r}
+selected_variables <- c('General_Health', 'Exercise', 'Sex', 'Age_Category', 'Smoking_History')
+
+disease_conditions <- c('Heart_Disease', 'Skin_Cancer', 'Other_Cancer', 'Diabetes', 'Arthritis')
+```
+
+```{r}
+#install.packages("GGally")
+library(GGally)
+# Select continuous attributes for the pair plot
+continuous_vars <- c('Height_.cm.', 'Weight_.kg.', 'BMI', 'Alcohol_Consumption', 'Fruit_Consumption', 'Green_Vegetables_Consumption', 'FriedPotato_Consumption')
+selected_data <- df[, c(categorical_vars, continuous_vars, 'Heart_Disease')]
+
+for (var in continuous_vars) {
+  # Create a subset of data with the current attribute
+  subset_data <- selected_data[, c(var, 'Heart_Disease')]
+  
+  # Create the pair plot for the current attribute
+  p <- ggpairs(subset_data, aes(colour = Heart_Disease, alpha = 0.5))
+  
+  # Print the plot with the attribute name as the title
+  print(p + ggtitle(paste("Pair Plot for", var, "and Heart_Disease")))
+}
+for (cat_var in categorical_vars) {
+  # Create a subset of data with the current categorical attribute
+  subset_data <- selected_data[, c(cat_var, 'Heart_Disease')]
+  
+  # Create the pair plot for the current categorical attribute
+  p <- ggpairs(subset_data, aes(colour = Heart_Disease, alpha = 0.5))
+  
+  # Print the plot with the attribute name as the title
+  print(p + ggtitle(paste("Pair Plot for", cat_var, "and Heart_Disease")))
+}
+```
+
+# Kiểm tra về đa cộng tuyến
+
+```{r}
+library(car)
+# Calculate VIF values
+vif_data <- df[continuous_vars]
+vif_values <- car::vif(lm(vif_data))
+
+# Display VIF values
+print(vif_values)
+
+
+```
+
+Vì vif không lớn hơn 5 trong bất kỳ biến nào nên không có hiện tượng đa
+cộng tuyến đáng kể.
+
+```{r}
+
+
+for (disease in disease_conditions) {
+  for (variable in selected_variables) {
+    p <- ggplot(df, aes(x = !!as.name(variable), fill = !!as.name(disease))) +
+      geom_bar(position = "dodge") +
+      labs(title = paste("Relationship between", variable, "and", disease),
+           x = variable,
+           y = "Count") +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+      scale_fill_discrete(name = disease)
+    
+    print(p)
+  }
+}
+
+```
+
+# Xây dựng mô hình dự đoán bằng mô hình hồi quy logistic
+
+Vì biến phụ thuộc là một biến mang tính đo lường nhị nhân, có thể sử
+dụng phương pháp **Phân tích hồi quy logistics** để phân tích mối liên
+hệ giữa biến phụ thuộc và biến độc lập.
+
+Trong hồi quy logistic, biến phản hồi phải là kết quả nhị phân (ví dụ: 0
+cho "Không" và 1 cho "Có") biểu thị sự có hoặc không của một sự kiện
+(trong trường hợp này là bệnh tim). Do đó sẽ chuẩn hoá các biến phân
+loại.
+
+## Chia dữ liệu ngẫu nhiên
+
+```{r}
+# Create a mapping for the values to numeric values
+#value_mapping <- c('Poor' = 1, 'Fair' = 2, 'Good' = 3, 'Very Good' = 4, 'Excellent' = 5)
+
+# Convert the 'General_Health' factor levels to numeric values using the mapping
+#df$General_Health <- factor(df$General_Health, levels = names(value_mapping), labels = value_mapping)
+# Convert the new column back to a factor
+#df$General_Health <- factor(df$General_Health)
+
+# Convert the "Heart_Disease" column to numeric (0/1)
+#df$Heart_Disease <- ifelse(df$Heart_Disease == "Yes", 1, 0)
+
+```
+
+```{r}
+library(caret)
+set.seed(42) # Để đảm bảo tính nhất quán trong kết quả
+train_index <- createDataPartition(df$Heart_Disease, p = 0.7, list = FALSE)
+train_data <- df[train_index, ]
+test_data <- df[-train_index, ]
+#train_data$Heart_Disease <- as.numeric(train_data$Heart_Disease == "Yes")
+```
+
+## Ước tính tham số
+
+Sau khi chia dữ liệu ra hai nhóm nhỏ, chúng ta bắt đầu xây dựng mô hình
+với ước tính tham số trên dữ liệu *train_data*.
+
+```{r}
+library(table1)
+table1_summary <- table1(~ General_Health + Checkup + Exercise + 
+         Skin_Cancer + Other_Cancer + Depression + Diabetes +
+       Arthritis + Sex + Age_Category + Height_.cm. + Weight_.kg. +
+         BMI + Smoking_History + Alcohol_Consumption + Fruit_Consumption
+       + Green_Vegetables_Consumption + FriedPotato_Consumption | Heart_Disease, data = df)
+```
+
+Chúng ta có thể bắt đầu với giả thuyết về mối liên quan giữa xác suất
+(hay odds) có vấn đề tim mạch và độ tuổi. Vì theo phân tích ở trên, có
+vẻ có ảnh hưởng cao nhất.
+
+```{r}
+model.full <- lm(Heart_Disease ~ ., data = train_data)
+model.null <- lm(Heart_Disease ~ 1, data = train_data)
+MASS::stepAIC(model.null, direction = "forward", scope = list(lower = model.null,
+                                                              upper = model.full))
+```
+
+```{r}
+m_aic = lm(Heart_Disease ~ General_Health + Age_Category + 
+    Sex + Diabetes + Smoking_History + Arthritis + Checkup + 
+    Alcohol_Consumption + Skin_Cancer + Depression + Weight_.kg. + 
+    Other_Cancer + Exercise + Green_Vegetables_Consumption, data = train_data)
+
+summary(m_aic)
+library(relaimpo)
+calc.relimp(m_aic, type="lmg")
+```
+
+```{r}
+m1 = glm(Heart_Disease ~ Age_Category, family = binomial, data = train_data)
+logistic.display(m1)
+```
+
+Kết quả trên cho thấy, độ tuổi có liên quan đến nguy cơ mắc bệnh tim. So
+với độ tuổi 18-24, ngoại trừ so với độ tuổi 25-29 không có ý nghĩa thống
+kê, khả năng mắc bệnh tim ở độ tuổi 30-34 cao hơn gấp 2.03 lần (khoảng
+tin cậy 95% là (1.52,2.7)), tăng nhanh dần (0.5, 1.5, 2.22, 3.02, ...)
+cho đến độ tuổi 80+.
+
+```{r}
+m2 = glm(Heart_Disease ~ Age_Category + General_Health, family = binomial, data = train_data)
+logistic.display(m2)
+```
+
+```{r}
+m4 = glm(Heart_Disease ~ General_Health + Checkup + Exercise + 
+         Skin_Cancer + Other_Cancer + Depression + Diabetes +
+       Arthritis + Sex + Age_Category + Height_.cm. + Weight_.kg. +
+         BMI + Smoking_History + Alcohol_Consumption + Fruit_Consumption
+       + Green_Vegetables_Consumption + FriedPotato_Consumption,
+       family=binomial, data = train_data)
+logistic.display(m4)
+```
+
+## Tìm mô hình tối ưu
+
+```{r}
+library(BMA)
+predictor_df <- train_data[, !(names(train_data) %in% c("Heart_Disease"))]
+
+dependent_df <- train_data["Heart_Disease"]
+# Extract the dependent variable as a vector (one-dimensional array)
+y <- dependent_df$Heart_Disease
+
+bma = bic.glm(predictor_df, y = y, strict = F,
+              OR = 20, glm.family="binomial")
+
+imageplot.bma(bma)
+
+summary(bma)
+```
+
+Phương pháp BMA chọn 2 mô hình tốt nhất, mô hình 1 gồm 11 biến:(
+"General_Health", "Checkup", "Skin_Cancer", "Depression", "Diabetes",
+"Arthritis", "Sex", "Age", "Height\_.cm.", "Smoking_History",
+"Alcohol_Consumption"), mô hình 2 loại bỏ biến "Height\_.cm.". Hai mô
+hình có chỉ số BIC gần bằng nhau, nhưng xác suất hậu định của mô hình 1
+là 94.5%, cao hơn nhiều so với mô hình 2 (5.5%). Do đó, chọn mô hình 1
+làm mô hình tiên lượng.
+
+```{r}
+mod.train = train(Heart_Disease ~ General_Health + Checkup + Skin_Cancer + Depression +
+            Diabetes + Arthritis + Sex + Age_Category + Height_.cm. +
+            Smoking_History + Alcohol_Consumption
+            , data = train_data, method = "glm", family ="binomial")
+summary(mod.train)
+```
+
+Sau khi có các tham số, chúng ta bắt đầu kiểm định mô hình trong dữ liệu
+test_data
+
+```{r}
+pred = predict(mod.train, newdata = test_data, type = "raw")
+confusionMatrix(pred, test_data$Heart_Disease, positive = "Yes")
+```
+
+```{r}
+pred_probs <- predict(mod.train, newdata = test_data, type = "prob")
+pred = data.frame(pred_probs, test_data$Heart_Disease)
+
+pred$test_data.Heart_Disease <- ifelse(pred$test_data.Heart_Disease == "Yes", 1, 0)
+```
+
+```{r}
+library(pROC)
+ROC = roc(pred$test_data.Heart_Disease, pred$No)
+
+auc(ROC)
+ci.auc(ROC)
+
+```
+
+```{r}
+plot.roc(ROC, print.auc = TRUE, auc.polygon = TRUE, grid = c(0.1, 0.2),
+         grid.col = c("green", "red"), max.auc.polygon = TRUE, auc.polygon.col = "lightgrey", print.thres = TRUE)
+```
+
+```{r}
+
+library(rms)
+
+model = glm(Heart_Disease ~ General_Health + Checkup + Skin_Cancer + Depression +
+            Diabetes + Arthritis + Sex + Age_Category + Height_.cm. +
+            Smoking_History + Alcohol_Consumption, 
+            data = train_data)
+df$pred = predict(model, newdata = df, type = "response")
+pred.logit = predict(model) 
+phat = 1/(1+exp(-pred.logit))
+val.prob(phat, df$Heart_Disease, m= 20, cex = 0.5)
+```
+
+```         
+```
+
+```{r}
+library(ggplot2)
+ggplot(data = data.frame(Predicted = pred, Actual = test_data$Heart_Disease), aes(x = Predicted, fill = factor(Actual))) +
+  geom_density(alpha = 0.5) +
+  labs(title = "Predicted Probability Density Plot") +
+  scale_fill_discrete(name = "Actual")
+```
+
+```{r}
+library(ggplot2)
+conf_matrix_df <- as.data.frame(conf_matrix$table)
+colnames(conf_matrix_df) <- c("Reference", "Prediction", "Frequency")
+
+ggplot(conf_matrix_df, aes(x = Reference, y = Prediction, fill = Frequency)) +
+  geom_tile() +
+  scale_fill_gradient(low = "white", high = blue) +
+  labs(title = "Confusion Matrix Heatmap",
+       x = "Reference",
+       y = "Prediction") +
+  theme_minimal()
+```
+
+```{r}
+library(ggplot2)
+
+# Calculate the average predicted probabilities within bins
+bin_size <- 0.1
+pred_bins <- cut(pred, breaks = seq(0, 1, by = bin_size), include.lowest = TRUE)
+avg_prob_by_bin <- tapply(pred, pred_bins, mean)
+
+# Create a data frame for the calibration plot
+calibration_data <- data.frame(Observed = levels(pred_bins),
+                                Predicted = avg_prob_by_bin)
+
+# Create the calibration plot
+ggplot(calibration_data, aes(x = Predicted, y = Observed)) +
+  geom_point() +
+  geom_line() +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "red") +
+  labs(title = "Calibration Plot",
+       x = "Mean Predicted Probability",
+       y = "Observed Proportion of Positive Cases") +
+  theme_minimal()
+
+
+```
+
+```{r}
+m_bma = glm(Heart_Disease ~ General_Health + Checkup + Skin_Cancer + Depression +
+            Diabetes + Arthritis + Sex + Age_Category + Height_.cm. +
+            Smoking_History + Alcohol_Consumption
+            ,family = binomial,  data = train_data)
+logistic.display(m_bma)
+```
+
+```{r}
+create_log_odds <- function(yes_no_variable) {
+  as.numeric(yes_no_variable == "Yes")
+}
+
+# List of predictor variables to inspect
+predictor_vars <- c('Height_.cm.', 'Weight_.kg.', 'BMI', 'Alcohol_Consumption', 'Fruit_Consumption', 'Green_Vegetables_Consumption', 'FriedPotato_Consumption')
+
+# Visual inspection of continuous predictor variables
+for (var in predictor_vars) {
+  p <- ggplot(df1, aes_string(x = var, y = "LogOdds")) +
+    geom_point() +
+    geom_smooth(method = "lm", se = FALSE) +
+    labs(title = paste("Log-Odds vs", var),
+         x = var,
+         y = "Log-Odds") +
+    theme_minimal()
+  
+  print(p)
+}
+
+# Handling categorical predictor variables using dummy variables
+categorical_vars <- c('Alcohol_Consumption', 'Fruit_Consumption', 'Green_Vegetables_Consumption', 'FriedPotato_Consumption')
+
+for (cat_var in categorical_vars) {
+  df_dummies <- model.matrix(~ df1[[cat_var]] - 1)
+  colnames(df_dummies) <- gsub("df[[cat_var]]", cat_var, colnames(df_dummies))
+  
+  df1 <- cbind(df1, df_dummies)
+  
+  # Visual inspection of dummy variables
+  for (dummy_var in colnames(df_dummies)) {
+    p <- ggplot(df, aes_string(x = dummy_var, y = "LogOdds")) +
+      geom_point() +
+      geom_smooth(method = "lm", se = FALSE) +
+      labs(title = paste("Log-Odds vs", dummy_var),
+           x = dummy_var,
+           y = "Log-Odds") +
+      theme_minimal()
+    
+    print(p)
+  }
+}
+```
+
+\-\--
+
+```{r}
+m1 = glm(Heart_Disease ~ Age_Category, family = binomial, data = train_data)
+```
+
+```{r}
+m2 = glm(Heart_Disease ~ Age_Category + Depression, family = binomial, data = train_data)
+logistic.display(m2)
+```
+
+```{r}
+lrtest(m2, m1)
+```
+
+```{r}
+m3 = glm(Heart_Disease ~ Age_Category + Depression + Exercise                    , family = binomial, data = train_data)
+logistic.display(m3)
+```
+
+```{r}
+m_bma <- glm(Heart_Disease ~ General_Health + Checkup + Skin_Cancer + Depression +
+            Diabetes + Arthritis + Sex + Age_Category + Height_.cm. +
+            Smoking_History + Alcohol_Consumption, family = binomial, data = train_data)
+logistic.display(m_bma)
+```
+
+```{r}
+library(rms)
+m = lrm(Heart_Disease ~ General_Health + Checkup + Skin_Cancer + Depression +
+            Diabetes + Arthritis + Sex + Age_Category + Height_.cm. +
+            Smoking_History + Alcohol_Consumption, x = TRUE, y = TRUE, data = train_data)
+anova(m)
+plot(anova(m), pch=16, cex=1)
+```
+
+## Phân tích calibration
+
+```{r}
+model_full = lrm(Heart_Disease ~ General_Health + Checkup + Skin_Cancer + Depression +
+            Diabetes + Arthritis + Sex + Age_Category + Height_.cm. +
+            Smoking_History + Alcohol_Consumption, x = TRUE, y = TRUE, data = df)
+pred.logit = predict(model_full)
+phat = 1 / (1+exp(-pred.logit))
+val.prob(phat_subset, subset_df$Heart_Disease == "Yes", m = 20, cex = 0.5)
+
+```
